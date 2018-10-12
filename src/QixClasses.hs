@@ -75,17 +75,11 @@ makeMethods (ClassDef classId _ m_methods) = map (makeMethod classId) (concat m_
 makeMethod :: Id -> MethodDefinition -> ([String], String)
 makeMethod classId method@(MethodDef methodId _ retType args _) =
   let (inputArgs, outputArgs) = partition isInputArg args
-      haskellArgs             = intersperse "->" (classId:(map makeHaskellArg inputArgs))
       (retProps, returnType)  = makeReturnType methodId retType outputArgs
       returnTypeString        = toHaskellType returnType
-      syncMethodId            = camelCase methodId
-      asyncMethodId           = syncMethodId ++ "Async"
-      inputArgIds             = "obj":(map (camelCase.getId) inputArgs)
-      callbackMethod          = "(" ++ makeCallbackMethodCall methodId (not $ isVoid retType) (map getId outputArgs) ++ ")"
    in ( map fst retProps
       , unlines $
-          [ syncMethodId ++ " :: " ++ (unwords haskellArgs) ++ " -> SDKM " ++ returnTypeString
-          , unwords (syncMethodId:inputArgIds) ++ " = " ++ unwords (asyncMethodId:inputArgIds) ++ " >>= awaitResult"
+          [ makeSyncMethod classId methodId inputArgs retType
           ] ++
           ( if null retProps
             then []
@@ -98,7 +92,32 @@ makeMethod classId method@(MethodDef methodId _ retType args _) =
                  ( map makeHasPropInstance (zip (repeat returnTypeString) (retProps)) )
           ) ++
           [ ""
-          , asyncMethodId ++ " :: " ++ (unwords haskellArgs) ++ " -> SDKM (Task " ++ returnTypeString ++ ")"
+          , makeAsyncMethod classId methodId (inputArgs, outputArgs) retType
+          ]
+      )
+
+getArgId (MethodArgumentDef argId _ _) = argId
+
+makeSyncMethod :: String -> String -> [MethodArgumentDefinition] -> TypeRef -> String 
+makeSyncMethod classId methodId inputArgs returnType =
+  let syncMethodId  = camelCase methodId
+      asyncMethodId = syncMethodId ++ "Async"
+      haskellArgs   = intersperse "->" (classId:(map makeHaskellArg inputArgs))
+      inputArgIds   = "obj":(map (camelCase.getArgId) inputArgs)
+   in unlines
+        [ syncMethodId ++ " :: " ++ (unwords haskellArgs) ++ " -> SDKM " ++ toHaskellType returnType
+        , unwords (syncMethodId:inputArgIds) ++ " = " ++ unwords (asyncMethodId:inputArgIds) ++ " >>= awaitResult"
+        ]               
+               
+makeAsyncMethod :: String -> String -> ([MethodArgumentDefinition], [MethodArgumentDefinition]) -> TypeRef -> String 
+makeAsyncMethod classId methodId (inputArgs, outputArgs) returnType =
+  let syncMethodId   = camelCase methodId
+      asyncMethodId  = syncMethodId ++ "Async"
+      haskellArgs    = intersperse "->" (classId:(map makeHaskellArg inputArgs))
+      inputArgIds    = "obj":(map (camelCase.getArgId) inputArgs)
+      callbackMethod = "(" ++ makeCallbackMethodCall methodId (not $ isVoid returnType) (map getArgId outputArgs) ++ ")"
+   in unlines $
+          [ asyncMethodId ++ " :: " ++ (unwords haskellArgs) ++ " -> SDKM (Task " ++ toHaskellType returnType ++ ")"
           , unwords $ (asyncMethodId:inputArgIds) ++ ["="]
           ] ++
           ( case map makeArgumentDefinition inputArgs of
@@ -107,10 +126,6 @@ makeMethod classId method@(MethodDef methodId _ retType args _) =
                          , unwords $ ["   in sendRequestM (getHandle obj)", show methodId, "args", callbackMethod]
                          ]
           )
-      )
- where
-  getId (MethodArgumentDef argId _ _) = argId
-
 makeNewType :: Id -> String
 makeNewType id =
   "newtype " ++ id ++ " = " ++ id ++ " AbstractStructure"
