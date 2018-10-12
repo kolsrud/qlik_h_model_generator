@@ -1,4 +1,4 @@
 # ModelGenerator
 
-stack build
-stack exec ModelGenerator
+    stack build
+    stack exec ModelGenerator
