@@ -15,7 +15,8 @@ import QixAbsSyntax
 import Data.Maybe
 import Data.Char
 import Data.List
-       
+import Debug.Trace
+              
 makeClasses :: QixFile -> ([String], [String], [(String, [String])])
 makeClasses qixFile = let (props, qixClasses, classes) = unzip3 $ map makeClass (getAllClasses qixFile)
                        in (concat props, concat qixClasses, classes)
@@ -73,10 +74,11 @@ makeMethods :: ClassDefinition -> [([String], String)]
 makeMethods (ClassDef classId _ m_methods) = map (makeMethod classId) (concat m_methods)
 
 makeMethod :: Id -> MethodDefinition -> ([String], String)
-makeMethod classId method@(MethodDef methodId _ retType args _) =
+makeMethod classId method@(MethodDef methodId attribs retType args _) =
   let (inputArgs, outputArgs) = partition isInputArg args
       (retProps, returnType)  = makeReturnType methodId retType outputArgs
       returnTypeString        = toHaskellType returnType
+      qixMethodId             = maybe methodId getAlias (getAttribute "json_alias" attribs)
    in ( map fst retProps
       , unlines $
           [ makeSyncMethod classId methodId inputArgs returnType
@@ -91,9 +93,14 @@ makeMethod classId method@(MethodDef methodId _ retType args _) =
                  ( map makeHasPropInstance (zip (repeat returnTypeString) (retProps)) ) ++
                  [ "" ]
           ) ++
-          [ makeAsyncMethod classId methodId (inputArgs, outputArgs) returnType
+          [ makeAsyncMethod classId methodId qixMethodId (inputArgs, outputArgs) retType returnType
           ]
       )
+
+getAlias :: Attribute -> String
+getAlias attribute = case attribute of
+  Attribute "json_alias" True [AttributeArgument_Expr (Just alias) Nothing Nothing] -> alias
+  _ -> error $ "getAlias " ++ show attribute
 
 getArgId (MethodArgumentDef argId _ _) = argId
 
@@ -135,24 +142,24 @@ makeAsyncTypeSignature classId methodId inputArgs returnType =
   let haskellArgs   = intersperse "->" (classId:(map makeHaskellArg inputArgs))
    in methodId ++ " :: " ++ (unwords haskellArgs) ++ " -> SDKM (Task " ++ toHaskellType returnType ++ ")"
 
-makeAsyncMethod :: String -> String -> ([MethodArgumentDefinition], [MethodArgumentDefinition]) -> TypeRef -> String 
-makeAsyncMethod classId methodId (inputArgs, outputArgs) returnType =
+makeAsyncMethod :: String -> String -> String -> ([MethodArgumentDefinition], [MethodArgumentDefinition]) -> TypeRef -> TypeRef -> String 
+makeAsyncMethod classId methodId qixMethodId (inputArgs, outputArgs) retType returnType =
   let asyncMethodId  = camelCase methodId ++ "Async"
       asyncMethodId_ = asyncMethodId ++ "_"
       inputArgIds    = "obj":(map (camelCase.getArgId) inputArgs)
-      callbackMethod = "(" ++ makeCallbackMethodCall methodId (not $ isVoid returnType) (map getArgId outputArgs) ++ ")"
+      callbackMethod = "(" ++ makeCallbackMethodCall methodId (not $ isVoid retType) (map getArgId outputArgs) ++ ")"
       (mandatory,optional) = break isOptionalArg inputArgs
    in unlines $
           [ makeAsyncTypeSignature classId asyncMethodId mandatory returnType
           , unwords $ [call asyncMethodId mandatory, "="]
-          , defineArgs mandatory $ \args -> unwords $ ["sendRequestM (getHandle obj)", show methodId, args, callbackMethod]
+          , defineArgs mandatory $ \args -> unwords $ ["sendRequestM (getHandle obj)", show qixMethodId, args, callbackMethod]
           ] ++
           ( if null optional
             then []
             else [ ""
                  , makeAsyncTypeSignature classId asyncMethodId_ inputArgs returnType
                  , unwords $ [call asyncMethodId_ inputArgs, "="]
-                 , defineArgs inputArgs $ \args -> unwords $ ["sendRequestM (getHandle obj)", show methodId, args, callbackMethod]
+                 , defineArgs inputArgs $ \args -> unwords $ ["sendRequestM (getHandle obj)", show qixMethodId, args, callbackMethod]
                  ]
           )
 
@@ -238,6 +245,10 @@ toHaskellPrimType primType = case primType of
   PrimitiveType_char   -> "Char"
   PrimitiveType_string -> "String"
 
+getAttribute :: String -> [Attribute] -> Maybe Attribute
+getAttribute _ [] = Nothing
+getAttribute attribId (a@(Attribute theId _ _):as) = if attribId == theId then Just a else getAttribute attribId as
+        
 hasAttributeArg :: String -> MethodArgumentDefinition -> Bool
 hasAttributeArg attrib (MethodArgumentDef _ attribs _) = any (==attrib) [ attribId | Attribute attribId _ _ <- attribs]
 
