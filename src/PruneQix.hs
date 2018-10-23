@@ -62,10 +62,7 @@ pruneQixDefinition def = def
 pruneQixDefClass :: Bool -> ClassDefinition -> ClassDefinition
 pruneQixDefClass _ def@(ClassDef _ _ Nothing) = def
 pruneQixDefClass isPublicDefault (ClassDef id m_ids (Just methods)) =
-  if id == "GenericObject"
-  then let nonPublic = map getMethodId $ filter (not.(isPublicMethod isPublicDefault)) methods
-        in trace ("Non public methods: " ++ show nonPublic) $ ClassDef id m_ids (Just (filter (isPublicMethod isPublicDefault) methods))
-  else ClassDef id m_ids (Just (filter (isPublicMethod isPublicDefault) methods))
+  ClassDef id m_ids (Just (filter (isPublicMethod isPublicDefault) methods))
 
 getMethodId :: MethodDefinition -> String
 getMethodId (MethodDef methodId _ _ _ _) = methodId
